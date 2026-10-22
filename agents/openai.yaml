@@ -1,0 +1,4 @@
+interface:
+  display_name: "NMR 1H Duplicate Check"
+  short_description: "Range-based duplicate detection for Bruker 1H NMR spectra"
+  default_prompt: "Check this batch of 1H NMR spectra and report duplicate pairs."
