@@ -132,7 +132,7 @@ Do not lower thresholds simply to increase the number of hits. Validate changes 
 
 ## Incremental history
 
-Use the same `--history-dir` on every run for a project. The script stores a cumulative `nmr_inventory_history.json` keyed by resolved `fid` path. A new run merges its inventory with the history and compares the complete set of old and new spectra.
+Use the same `--history-dir` on every run for a project. The script stores a cumulative `nmr_inventory_history.json` keyed by resolved `fid` path. A new run merges its inventory with the history, computes `NEW_NEW` and `NEW_HISTORY` pairs, and reuses cached `HISTORY_HISTORY` results when dataset hashes and parameters are unchanged.
 
 Each pair is labelled:
 

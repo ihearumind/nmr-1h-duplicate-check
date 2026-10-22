@@ -56,7 +56,7 @@ For `.mnova` input, extract referenced Bruker paths first. The `.mnova` containe
 
 3. **Compare all pairs**
    - Compare every 1H spectrum against every other 1H spectrum, including within each source and across sources.
-   - For incremental batches, pass the same `--history-dir` on every run. The script merges the new inventory with the history file and compares all old + new spectra. `nmr_scope_breakdown.csv` labels pairs as `NEW_NEW`, `NEW_HISTORY`, or `HISTORY_HISTORY`.
+   - For incremental batches, pass the same `--history-dir` on every run. The script merges the new inventory with the history file, recomputes only `NEW_NEW` and `NEW_HISTORY` pairs, and reuses cached `HISTORY_HISTORY` results when the data hashes and parameters are unchanged. `nmr_scope_breakdown.csv` labels the comparison types.
    - Mark pairs with different solvents as `NOT_COMPARABLE_DIFFERENT_SOLVENT`; do not turn a cross-solvent score into a duplicate verdict.
    - Use the same preprocessing and thresholds for every spectrum.
 

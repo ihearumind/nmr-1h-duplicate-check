@@ -415,10 +415,54 @@ def main(argv=None):
                 feats[name][rn]={"info":False,"p":np.array([],int),"w":np.array([]),"energy":0.0}; continue
             p,w=peak_table(v,sel); energy=float(vv[sel].sum()/max(total,1e-12)); maxfrac=float(vv[sel].max()/max(gmax,1e-12))
             feats[name][rn]={"info":energy>=args.min_energy and maxfrac>=args.min_maxfrac and len(p)>=2,"p":p,"w":w,"energy":energy}
-    rows=[]; evidence=[]
+    history_cache = {}
+    history_cache_file = None
+    cache_config_signature = None
+    if args.history_dir:
+        history_dir = Path(args.history_dir)
+        history_dir.mkdir(parents=True, exist_ok=True)
+        history_cache_file = history_dir / "nmr_pair_history.json"
+        config_obj = {
+            "ranges": ranges, "min_energy": args.min_energy, "min_maxfrac": args.min_maxfrac,
+            "peak_tol": args.peak_tol, "max_shift": args.max_shift, "strong_score": args.strong_score,
+            "loose_score": args.loose_score, "high_global_cosine": args.high_global_cosine,
+            "suspicious_global_cosine": args.suspicious_global_cosine,
+        }
+        cache_config_signature = hashlib.sha256(json.dumps(config_obj, sort_keys=True).encode("utf-8")).hexdigest()
+        if history_cache_file.exists():
+            try:
+                cached = json.loads(history_cache_file.read_text(encoding="utf-8"))
+                if cached.get("config_signature") == cache_config_signature:
+                    history_cache = {tuple(sorted([item["row"]["name_a"], item["row"]["name_b"]])): item for item in cached.get("pairs", [])}
+                    print(f"Loaded cached pair results: {len(history_cache)}")
+                else:
+                    print("Comparison parameters changed; cached pairs will not be reused.")
+            except Exception as exc:
+                print(f"Ignoring invalid pair cache: {exc}", file=sys.stderr)
+
+    def pair_signature(ra, rb):
+        payload = [cache_config_signature, sorted([ra.get("fid_sha256", ""), rb.get("fid_sha256", "")]), sorted([ra.get("pdata_sha256", ""), rb.get("pdata_sha256", "")])]
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+    rows=[]; evidence=[]; cache_entries=[]
     for i,na in enumerate(names):
         for nb in names[i+1:]:
-            va,ma,aca,_=data[na]; vb,mb,acb,_=data[nb]; mask=ma&mb; shift=best_shift(va,vb,mask,args.max_shift); aa=va.copy(); bb=shift_array(vb,shift)
+            va,ma,aca,_=data[na]; vb,mb,acb,_=data[nb]; mask=ma&mb
+            ra, rb = rec_by_name[na], rec_by_name[nb]
+            if ra["is_new"] and rb["is_new"]:
+                comparison_type = "NEW_NEW"
+            elif ra["is_new"] or rb["is_new"]:
+                comparison_type = "NEW_HISTORY"
+            else:
+                comparison_type = "HISTORY_HISTORY"
+            pkey = tuple(sorted([na, nb]))
+            sig = pair_signature(ra, rb) if cache_config_signature else ""
+            cached_entry = history_cache.get(pkey)
+            if comparison_type == "HISTORY_HISTORY" and cached_entry and cached_entry.get("signature") == sig:
+                rows.append(cached_entry["row"])
+                cache_entries.append(cached_entry)
+                continue
+            shift=best_shift(va,vb,mask,args.max_shift); aa=va.copy(); bb=shift_array(vb,shift)
             same_solvent=aca.get("SOLVENT","")==acb.get("SOLVENT",""); range_rows=[]
             for rn,lo,hi in ranges:
                 fa,fb=feats[na][rn],feats[nb][rn]; sel=mask&(GRID>=lo)&(GRID<=hi)
@@ -433,15 +477,14 @@ def main(argv=None):
             elif n_inf>=2 and n_loose>=2 and weighted>=.85 and n_bad<=1 and gcos>=args.suspicious_global_cosine: verdict="SUSPECTED_DUPLICATE"
             elif n_inf<2: verdict="INSUFFICIENT_INFORMATIVE_RANGES"
             else: verdict="NOT_DUPLICATE"
-            ra, rb = rec_by_name[na], rec_by_name[nb]
-            if ra["is_new"] and rb["is_new"]:
-                comparison_type = "NEW_NEW"
-            elif ra["is_new"] or rb["is_new"]:
-                comparison_type = "NEW_HISTORY"
-            else:
-                comparison_type = "HISTORY_HISTORY"
-            rows.append({"doc_a":ra["doc"],"doc_b":rb["doc"],"name_a":na,"name_b":nb,"is_new_a":ra["is_new"],"is_new_b":rb["is_new"],"comparison_type":comparison_type,"same_solvent":same_solvent,"shift_ppm":shift*STEP,"informative_ranges":n_inf,"strong_ranges":n_strong,"loose_ranges":n_loose,"bad_ranges":n_bad,"weighted_range_score":weighted,"global_cosine":gcos,"global_bin_cos_020":gbin,"global_deriv_cos":gder,"global_peak_coverage_020":gcov,"global_unique_ratio":1-gcov,"verdict":verdict,"range_summary":"; ".join(f"{x['range']}={x['score']:.3f}" for x in range_rows)})
+            row = {"doc_a":ra["doc"],"doc_b":rb["doc"],"name_a":na,"name_b":nb,"is_new_a":ra["is_new"],"is_new_b":rb["is_new"],"comparison_type":comparison_type,"same_solvent":same_solvent,"shift_ppm":shift*STEP,"informative_ranges":n_inf,"strong_ranges":n_strong,"loose_ranges":n_loose,"bad_ranges":n_bad,"weighted_range_score":weighted,"global_cosine":gcos,"global_bin_cos_020":gbin,"global_deriv_cos":gder,"global_peak_coverage_020":gcov,"global_unique_ratio":1-gcov,"verdict":verdict,"range_summary":"; ".join(f"{x['range']}={x['score']:.3f}" for x in range_rows)}
+            rows.append(row)
             for rr in range_rows: evidence.append({"name_a":na,"name_b":nb,**rr})
+            if cache_config_signature:
+                cache_entries.append({"signature": sig, "row": row})
+
+    if history_cache_file is not None and cache_config_signature is not None:
+        history_cache_file.write_text(json.dumps({"config_signature": cache_config_signature, "pairs": cache_entries}, ensure_ascii=False, indent=2), encoding="utf-8")
     rows.sort(key=lambda r:(-float(r["weighted_range_score"]),-int(r["strong_ranges"]))); high=[r for r in rows if r["verdict"]=="HIGH_CONFIDENCE_DUPLICATE"]; susp=[r for r in rows if r["verdict"]=="SUSPECTED_DUPLICATE"]; qc=[r for r,_ in datasets]
     scope_counts = Counter()
     for r in rows:
