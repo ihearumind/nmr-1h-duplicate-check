@@ -1,6 +1,6 @@
 # nmr-1h-duplicate-check
 
-已经检查并补齐了功能。现在这个 skill 支持：
+Skill用法：
 
 1. 下载后让 Codex 识别并安装。
 2. 读取 `.mnova` 中批量保存的 ¹H NMR 引用数据。
