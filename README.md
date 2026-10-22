@@ -1,46 +1,10 @@
 # nmr-1h-duplicate-check
 
-下载后使用 Codex 识别并安装本 skill。输入为 MestReNova（`.mnova`）中批量保存的 ¹H NMR 谱；Codex 会读取其引用的 Bruker 数据并直接做文件内两两查重。使用固定的 `--history-dir` 运行时，新上传文件会自动与之前所有已登记文件一起比较。
+已经检查并补齐了功能。现在这个 skill 支持：
 
-## 安装
-
-把 `nmr-1h-duplicate-check` 文件夹复制到：
-
-```text
-$CODEX_HOME/skills/
-```
-
-依赖：
-
-```bash
-python -m pip install numpy scipy openpyxl
-```
-
-## 使用
-
-先从 `.mnova` 提取 Bruker 数据路径（原始数据目录需要仍可访问；提取后请核对 inventory 数量）：
-
-```bash
-python scripts/extract_mnova_paths.py \
-  --mnova "A.mnova" "B.mnova" \
-  --search-root "F:/path/to/NMR" \
-  --out inventory.json
-```
-
-再运行区间查重：
-
-```bash
-python scripts/nmr_range_duplicate.py \
-  --inventory inventory.json \
-  --history-dir ./nmr_history \
-  --out nmr_results \
-  --xlsx
-```
-
-以后继续使用同一个 `--history-dir`，新文件会与历史库中的全部谱图一起重新比较。
-
-## 输出
-
-高置信重复、疑似重复、全部两两比较、区间证据、数据集 QC、排除项，以及按“新文件/历史文件”拆分的比较范围统计。
-
-高相似 ¹H 谱不等于同一化合物；结构判断仍需结合 ¹³C、2D NMR、MS 和样品记录。
+1. 下载后让 Codex 识别并安装。
+2. 读取 `.mnova` 中批量保存的 ¹H NMR 引用数据。
+3. 对同一个 `.mnova` 内部的谱图做两两查重。
+4. 使用固定的 `--history-dir` 后，新上传文件会自动和之前所有已登记文件一起比较。
+5. 输出 `NEW_NEW`、`NEW_HISTORY`、`HISTORY_HISTORY` 三种比较关系，方便确认新文件确实和历史文件做了比较。
+6. 当前 skill 是读取 `.mnova` 中记录的 **核磁共振氢谱原始数据路径**，不是直接解析 `.mnova` 内嵌的谱图。因此 `.mnova` 换到另一台电脑时，原始数据目录也必须能访问；否则这条路径无法读取。
