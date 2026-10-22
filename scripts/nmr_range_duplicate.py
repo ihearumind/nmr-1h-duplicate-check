@@ -15,6 +15,7 @@ import math
 import re
 import sys
 from pathlib import Path
+from collections import Counter
 
 import numpy as np
 
@@ -352,6 +353,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Range-based duplicate detection for Bruker 1H NMR spectra")
     ap.add_argument("--root", action="append", default=[], help="Root directory containing Bruker datasets. Repeat for multiple roots.")
     ap.add_argument("--inventory", help="JSON inventory with name/fid/acqus/pdata1r/procs/doc entries.")
+    ap.add_argument("--history-dir", help="Persistent directory for the cumulative inventory. New runs merge with all previous datasets and compare all of them.")
     ap.add_argument("--out", required=True, help="Output directory.")
     ap.add_argument("--ranges", help="Comma-separated ranges, e.g. 0.5-2,2-4,4-6.5,6.5-8.5,8.5-12")
     ap.add_argument("--min-energy", type=float, default=0.02)
@@ -365,14 +367,33 @@ def main(argv=None):
     ap.add_argument("--xlsx", action="store_true", help="Write XLSX if openpyxl is available.")
     args = ap.parse_args(argv)
 
-    inventory = read_inventory(Path(args.inventory)) if args.inventory else (discover_datasets([Path(p) for p in args.root]) if args.root else None)
-    if not inventory:
+    new_inventory = read_inventory(Path(args.inventory)) if args.inventory else (discover_datasets([Path(p) for p in args.root]) if args.root else None)
+    if not new_inventory:
         raise SystemExit("Provide --root or --inventory and ensure datasets exist.")
+    new_keys = {str(Path(x.get("fid", "")).resolve()).lower() for x in new_inventory if x.get("fid")}
+    inventory = new_inventory
+    if args.history_dir:
+        history_dir = Path(args.history_dir)
+        history_dir.mkdir(parents=True, exist_ok=True)
+        history_file = history_dir / "nmr_inventory_history.json"
+        previous = []
+        if history_file.exists():
+            previous = json.loads(history_file.read_text(encoding="utf-8-sig"))
+        merged = {}
+        for item in previous:
+            if item.get("fid"):
+                merged[str(Path(item["fid"]).resolve()).lower()] = item
+        for item in new_inventory:
+            if item.get("fid"):
+                merged[str(Path(item["fid"]).resolve()).lower()] = item
+        inventory = list(merged.values())
+        history_file.write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"History inventory: {history_file.resolve()} ({len(inventory)} datasets)")
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True); ranges = parse_ranges(args.ranges)
     datasets = []; excluded = []
     for item in inventory:
         ds = Path(item["fid"]).parent; acq = read_params(ds / "acqus")
-        rec = {"doc": item.get("doc",""), "name": item.get("name", dataset_name(ds,None)), "fid": str(item.get("fid",ds/"fid")), "acqus": str(item.get("acqus",ds/"acqus")), "pdata1r": str(item.get("pdata1r",ds/"pdata"/"1"/"1r")), "procs": str(item.get("procs",ds/"pdata"/"1"/"procs")), "nucleus": acq.get("NUC1",""), "solvent": acq.get("SOLVENT",""), "pulprog": acq.get("PULPROG",""), "sfo1_mhz": fnum(acq,"SFO1",float("nan")), "fid_sha256": sha256(Path(item["fid"])) if Path(item["fid"]).exists() else "", "pdata_sha256": sha256(Path(item["pdata1r"])) if Path(item["pdata1r"]).exists() else "", "dataset": str(ds)}
+        rec = {"doc": item.get("doc",""), "name": item.get("name", dataset_name(ds,None)), "fid": str(item.get("fid",ds/"fid")), "acqus": str(item.get("acqus",ds/"acqus")), "pdata1r": str(item.get("pdata1r",ds/"pdata"/"1"/"1r")), "procs": str(item.get("procs",ds/"pdata"/"1"/"procs")), "nucleus": acq.get("NUC1",""), "solvent": acq.get("SOLVENT",""), "pulprog": acq.get("PULPROG",""), "sfo1_mhz": fnum(acq,"SFO1",float("nan")), "fid_sha256": sha256(Path(item["fid"])) if Path(item["fid"]).exists() else "", "pdata_sha256": sha256(Path(item["pdata1r"])) if Path(item["pdata1r"]).exists() else "", "dataset": str(ds), "is_new": str(Path(item["fid"]).resolve()).lower() in new_keys}
         if rec["nucleus"] != "1H":
             excluded.append(rec); continue
         try:
@@ -384,6 +405,7 @@ def main(argv=None):
             rec["parse_ok"] = False; rec["source"] = repr(exc); excluded.append(rec)
     if len(datasets) < 2: raise SystemExit("Fewer than two 1H datasets were parsed.")
     data = {rec["name"]: (y,mask,acq,source) for rec,(y,mask,acq,source) in datasets}
+    rec_by_name = {rec["name"]: rec for rec, _ in datasets}
     names = list(data.keys()); feats = {}
     for name,(v,mask,acq,source) in data.items():
         feats[name] = {}; vv=np.maximum(v,0.0); total=float(vv[mask].sum()); gmax=float(vv[mask].max()) if np.any(mask) else 0.0
@@ -411,13 +433,31 @@ def main(argv=None):
             elif n_inf>=2 and n_loose>=2 and weighted>=.85 and n_bad<=1 and gcos>=args.suspicious_global_cosine: verdict="SUSPECTED_DUPLICATE"
             elif n_inf<2: verdict="INSUFFICIENT_INFORMATIVE_RANGES"
             else: verdict="NOT_DUPLICATE"
-            rows.append({"doc_a":next(r["doc"] for r,_ in datasets if r["name"]==na),"doc_b":next(r["doc"] for r,_ in datasets if r["name"]==nb),"name_a":na,"name_b":nb,"same_solvent":same_solvent,"shift_ppm":shift*STEP,"informative_ranges":n_inf,"strong_ranges":n_strong,"loose_ranges":n_loose,"bad_ranges":n_bad,"weighted_range_score":weighted,"global_cosine":gcos,"global_bin_cos_020":gbin,"global_deriv_cos":gder,"global_peak_coverage_020":gcov,"global_unique_ratio":1-gcov,"verdict":verdict,"range_summary":"; ".join(f"{x['range']}={x['score']:.3f}" for x in range_rows)})
+            ra, rb = rec_by_name[na], rec_by_name[nb]
+            if ra["is_new"] and rb["is_new"]:
+                comparison_type = "NEW_NEW"
+            elif ra["is_new"] or rb["is_new"]:
+                comparison_type = "NEW_HISTORY"
+            else:
+                comparison_type = "HISTORY_HISTORY"
+            rows.append({"doc_a":ra["doc"],"doc_b":rb["doc"],"name_a":na,"name_b":nb,"is_new_a":ra["is_new"],"is_new_b":rb["is_new"],"comparison_type":comparison_type,"same_solvent":same_solvent,"shift_ppm":shift*STEP,"informative_ranges":n_inf,"strong_ranges":n_strong,"loose_ranges":n_loose,"bad_ranges":n_bad,"weighted_range_score":weighted,"global_cosine":gcos,"global_bin_cos_020":gbin,"global_deriv_cos":gder,"global_peak_coverage_020":gcov,"global_unique_ratio":1-gcov,"verdict":verdict,"range_summary":"; ".join(f"{x['range']}={x['score']:.3f}" for x in range_rows)})
             for rr in range_rows: evidence.append({"name_a":na,"name_b":nb,**rr})
     rows.sort(key=lambda r:(-float(r["weighted_range_score"]),-int(r["strong_ranges"]))); high=[r for r in rows if r["verdict"]=="HIGH_CONFIDENCE_DUPLICATE"]; susp=[r for r in rows if r["verdict"]=="SUSPECTED_DUPLICATE"]; qc=[r for r,_ in datasets]
+    scope_counts = Counter()
+    for r in rows:
+        scope = (f"{r['doc_a']} internal" if r['doc_a'] == r['doc_b'] else " + ".join(sorted([r['doc_a'], r['doc_b']])))
+        scope_counts[(scope, r['comparison_type'])] += 1
+    scope_rows = []
+    for (scope, ctype), n in sorted(scope_counts.items()):
+        subset = [r for r in rows if (r['doc_a'] == r['doc_b'] and f"{r['doc_a']} internal" == scope or r['doc_a'] != r['doc_b'] and " + ".join(sorted([r['doc_a'], r['doc_b']])) == scope) and r['comparison_type'] == ctype]
+        h = sum(1 for r in subset if r['verdict'] == 'HIGH_CONFIDENCE_DUPLICATE')
+        su = sum(1 for r in subset if r['verdict'] == 'SUSPECTED_DUPLICATE')
+        scope_rows.append({'scope': scope, 'comparison_type': ctype, 'pair_count': n, 'high_confidence': h, 'suspected': su, 'other': n - h - su})
     def write_csv(name,fields,data):
         with open(out/name,"w",newline="",encoding="utf-8-sig") as f:
             w=csv.DictWriter(f,fieldnames=fields,extrasaction="ignore"); w.writeheader(); w.writerows(data)
     write_csv("nmr_duplicate_pairs.csv",list(rows[0].keys()),high); write_csv("nmr_suspected_pairs.csv",list(rows[0].keys()),susp); write_csv("nmr_all_pairs.csv",list(rows[0].keys()),rows); write_csv("nmr_dataset_qc.csv",["doc","name","nucleus","solvent","pulprog","sfo1_mhz","source","parse_ok","fid_sha256","pdata_sha256","dataset"],qc); write_csv("nmr_range_evidence.csv",["name_a","name_b","range","score","coverage","cosine","energy_a","energy_b","peaks_a","peaks_b","weight"],evidence)
+    write_csv("nmr_scope_breakdown.csv", ["scope","comparison_type","pair_count","high_confidence","suspected","other"], scope_rows)
     with open(out/"nmr_excluded.csv","w",newline="",encoding="utf-8-sig") as f:
         w=csv.DictWriter(f,fieldnames=["doc","name","nucleus","solvent","source","parse_ok","fid","dataset"],extrasaction="ignore"); w.writeheader(); w.writerows(excluded)
     if args.xlsx: build_xlsx(out/"nmr_duplicate_report.xlsx",rows,evidence,qc,high,susp,ranges,args)

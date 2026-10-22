@@ -1,57 +1,46 @@
 # nmr-1h-duplicate-check
 
-A Codex/Agent Skill for batch duplicate screening of Bruker 1H NMR spectra.
+下载后使用 Codex 识别并安装本 skill。输入为 MestReNova（`.mnova`）中批量保存的 ¹H NMR 谱；Codex 会读取其引用的 Bruker 数据并直接做文件内两两查重。使用固定的 `--history-dir` 运行时，新上传文件会自动与之前所有已登记文件一起比较。
 
-## Install
+## 安装
 
-Copy the `nmr-1h-duplicate-check` folder into your Codex skills directory:
-
-```text
-$CODEX_HOME/skills/nmr-1h-duplicate-check
-```
-
-or, on a default Windows install:
+把 `nmr-1h-duplicate-check` 文件夹复制到：
 
 ```text
-C:/Users/<you>/.codex/skills/nmr-1h-duplicate-check
+$CODEX_HOME/skills/
 ```
 
-Restart Codex after installation.
-
-## Dependencies
+依赖：
 
 ```bash
 python -m pip install numpy scipy openpyxl
 ```
 
-`openpyxl` is optional for CSV-only workflows but required for XLSX output.
+## 使用
 
-## Quick start
-
-From a directory containing Bruker datasets:
+先从 `.mnova` 提取 Bruker 数据路径（原始数据目录需要仍可访问；提取后请核对 inventory 数量）：
 
 ```bash
-python scripts/nmr_range_duplicate.py --root "F:/path/to/NMR" --out nmr_results --xlsx
+python scripts/extract_mnova_paths.py \
+  --mnova "A.mnova" "B.mnova" \
+  --search-root "F:/path/to/NMR" \
+  --out inventory.json
 ```
 
-From one or more `.mnova` files:
+再运行区间查重：
 
 ```bash
-python scripts/extract_mnova_paths.py   --mnova "Document 3.mnova" "Document 4.mnova" "zfs.mnova"   --search-root "F:/path/to/NMR"   --out inventory.json
-
-python scripts/nmr_range_duplicate.py   --inventory inventory.json   --out nmr_results --xlsx
+python scripts/nmr_range_duplicate.py \
+  --inventory inventory.json \
+  --history-dir ./nmr_history \
+  --out nmr_results \
+  --xlsx
 ```
 
-## What it outputs
+以后继续使用同一个 `--history-dir`，新文件会与历史库中的全部谱图一起重新比较。
 
-- high-confidence duplicate pairs
-- suspected duplicate pairs
-- all pairwise comparisons
-- range-level evidence
-- dataset QC and hashes
-- excluded/non-comparable datasets
-- optional XLSX workbook
+## 输出
 
-## Important note
+高置信重复、疑似重复、全部两两比较、区间证据、数据集 QC、排除项，以及按“新文件/历史文件”拆分的比较范围统计。
 
-High 1H spectral similarity is not proof of compound identity. Use 13C/2D NMR, MS, and sample records when identity matters.
+高相似 ¹H 谱不等于同一化合物；结构判断仍需结合 ¹³C、2D NMR、MS 和样品记录。

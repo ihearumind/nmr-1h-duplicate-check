@@ -56,6 +56,7 @@ For `.mnova` input, extract referenced Bruker paths first. The `.mnova` containe
 
 3. **Compare all pairs**
    - Compare every 1H spectrum against every other 1H spectrum, including within each source and across sources.
+   - For incremental batches, pass the same `--history-dir` on every run. The script merges the new inventory with the history file and compares all old + new spectra. `nmr_scope_breakdown.csv` labels pairs as `NEW_NEW`, `NEW_HISTORY`, or `HISTORY_HISTORY`.
    - Mark pairs with different solvents as `NOT_COMPARABLE_DIFFERENT_SOLVENT`; do not turn a cross-solvent score into a duplicate verdict.
    - Use the same preprocessing and thresholds for every spectrum.
 
@@ -83,16 +84,19 @@ For `.mnova` input, extract referenced Bruker paths first. The `.mnova` containe
 # CSV only
 python scripts/nmr_range_duplicate.py \
   --inventory inventory.json \
+  --history-dir ./nmr_history \
   --out nmr_results
 
 # CSV + XLSX
 python scripts/nmr_range_duplicate.py \
   --inventory inventory.json \
+  --history-dir ./nmr_history \
   --out nmr_results --xlsx
 
 # Custom ranges or thresholds
 python scripts/nmr_range_duplicate.py \
   --root "F:/path/to/NMR" \
+  --history-dir ./nmr_history \
   --out nmr_results \
   --ranges "0.5-2,2-4,4-6.5,6.5-8.5,8.5-12" \
   --peak-tol 0.020 \
@@ -102,6 +106,8 @@ python scripts/nmr_range_duplicate.py \
 
 Dependencies: `numpy`, `scipy`; `openpyxl` is optional but required for XLSX output.
 
+`extract_mnova_paths.py` defaults to resolved `/fid` references. If a `.mnova` contains spectra without a `/fid` string, use `--include-acqus-only` and verify the extracted inventory before running the comparison; that mode has higher recall but also higher false-positive risk.
+
 ## Reliability Rules
 
 - Prefer the instrument-processed `pdata/1/1r` over a raw-FID fallback.
@@ -109,6 +115,7 @@ Dependencies: `numpy`, `scipy`; `openpyxl` is optional but required for XLSX out
 - Do not treat different-solvent pairs as duplicates.
 - Do not decide from a single chemical-shift range; require at least two informative ranges.
 - Do not hide excluded files, parse failures, or non-comparable pairs.
+- Reuse one stable `--history-dir` for incremental batches; otherwise old datasets will not be carried into later comparisons.
 - Do not tune processing parameters separately for each spectrum.
 - Treat labels such as `HIGH_CONFIDENCE_DUPLICATE` as “same 1H spectral pattern”, not “same molecule”.
 - For borderline cases, preserve the numerical evidence rather than forcing a binary answer.

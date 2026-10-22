@@ -95,3 +95,13 @@ Use wording close to:
 > “X high-confidence spectral duplicate pairs and Y suspected pairs were found among N 1H spectra. These are spectral matches; compound identity requires 13C/2D NMR, MS, and sample-record confirmation.”
 
 For cross-solvent or cross-nucleus pairs, state that they were marked non-comparable rather than “not duplicate”.
+
+## Scope breakdown
+
+`nmr_scope_breakdown.csv` reports pair counts separately for each source pair and comparison type:
+
+- `NEW_NEW`
+- `NEW_HISTORY`
+- `HISTORY_HISTORY`
+
+This is the verification table for incremental uploads: a newly added file should produce `NEW_HISTORY` rows against every previously registered source.

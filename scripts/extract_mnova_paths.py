@@ -66,10 +66,64 @@ def dataset_name(fid: Path) -> str:
     return ds.name
 
 
+def resolve_inventory(strings, mnova: Path, search_root, index, include_acqus_only, seen):
+    cands = []
+    evidence_dirs = set()
+    for text in strings:
+        for c in candidate_paths(text):
+            if c not in cands:
+                cands.append(c)
+        for m in re.finditer(r"([A-Za-z]:[/\\].*?/pdata/1/(?:title|procs|1r)|/[^\x00\r\n]*?/pdata/1/(?:title|procs|1r))", text, re.I):
+            d = re.sub(r"/pdata/1/(?:title|procs|1r)$", "", m.group(1).replace("\\", "/"), flags=re.I)
+            evidence_dirs.add(d.lower())
+    resolved_items = []
+    for cand in cands:
+        if cand.lower().endswith("/acqus") and not include_acqus_only:
+            continue
+        resolved = None
+        reason = ""
+        target = cand[:-6] + "/fid" if cand.lower().endswith("/acqus") else cand
+        p = Path(target.replace("/", "\\")) if re.match(r"^[A-Za-z]:", target) else None
+        if p and p.exists() and p.name.lower() == "fid":
+            ds_candidate = p.parent.resolve()
+            if cand.lower().endswith("/acqus") and str(ds_candidate).replace("\\", "/").lower() not in evidence_dirs:
+                continue
+            resolved = p.resolve(); reason = "absolute-path"
+        elif search_root:
+            needle = target.replace("\\", "/").lower()
+            matches = []
+            for fid in index:
+                f = str(fid).replace("\\", "/").lower()
+                if f.endswith(needle) or needle.endswith(f):
+                    matches.append(fid)
+            if len(matches) == 1:
+                ds_candidate = matches[0].parent.resolve()
+                if cand.lower().endswith("/acqus") and str(ds_candidate).replace("\\", "/").lower() not in evidence_dirs:
+                    continue
+                resolved = matches[0]; reason = "search-root-suffix"
+        if resolved is None:
+            continue
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        ds = resolved.parent
+        resolved_items.append({
+            "doc": mnova.stem,
+            "name": dataset_name(resolved),
+            "fid": str(ds / "fid"),
+            "acqus": str(ds / "acqus"),
+            "pdata1r": str(ds / "pdata" / "1" / "1r"),
+            "procs": str(ds / "pdata" / "1" / "procs"),
+            "resolved_by": reason,
+        })
+    return resolved_items
+
 def main():
     ap = argparse.ArgumentParser(description="Extract Bruker dataset references from .mnova files")
     ap.add_argument("--mnova", nargs="+", required=True)
     ap.add_argument("--search-root", help="Root directory containing Bruker datasets, used to resolve relative paths.")
+    ap.add_argument("--include-acqus-only", action="store_true", help="Also include datasets referenced only by acqus + pdata/title/procs paths. Higher recall, lower precision; verify the inventory.")
     ap.add_argument("--out", required=True, help="Output inventory JSON.")
     args = ap.parse_args()
 
@@ -87,47 +141,13 @@ def main():
     for mnova_name in args.mnova:
         mnova = Path(mnova_name)
         data = mnova.read_bytes()
-        strings = extract_strings(data, False) + extract_strings(data, True)
-        cands = []
-        for text in strings:
-            for c in candidate_paths(text):
-                if c not in cands:
-                    cands.append(c)
-        for cand in cands:
-            resolved = None
-            reason = ""
-            target = cand[:-6] + "/fid" if cand.lower().endswith("/acqus") else cand
-            p = Path(target.replace("/", "\\")) if re.match(r"^[A-Za-z]:", target) else None
-            if p and p.exists() and p.name.lower() == "fid":
-                resolved = p.resolve()
-                reason = "absolute-path"
-            elif search_root:
-                # Match the longest suffix to a discovered fid path.
-                needle = target.replace("\\", "/").lower()
-                matches = []
-                for fid in index:
-                    s = str(fid).replace("\\", "/").lower()
-                    if s.endswith(needle) or needle.endswith(s):
-                        matches.append(fid)
-                if len(matches) == 1:
-                    resolved = matches[0]
-                    reason = "search-root-suffix"
-            if resolved is None:
-                continue
-            key = str(resolved).lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            ds = resolved.parent
-            inventory.append({
-                "doc": mnova.stem,
-                "name": dataset_name(resolved),
-                "fid": str(ds / "fid"),
-                "acqus": str(ds / "acqus"),
-                "pdata1r": str(ds / "pdata" / "1" / "1r"),
-                "procs": str(ds / "pdata" / "1" / "procs"),
-                "resolved_by": reason,
-            })
+        le_strings = extract_strings(data, False)
+        be_strings = extract_strings(data, True)
+        # Some .mnova files contain both encodings. Prefer the encoding whose
+        # candidate paths can actually be resolved, then fall back to the other.
+        le_items = resolve_inventory(le_strings, mnova, search_root, index, args.include_acqus_only, seen)
+        be_items = resolve_inventory(be_strings, mnova, search_root, index, args.include_acqus_only, seen) if not le_items else []
+        inventory.extend(le_items if le_items else be_items)
 
     out = Path(args.out)
     out.write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")

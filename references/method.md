@@ -129,3 +129,15 @@ Do not lower thresholds simply to increase the number of hits. Validate changes 
 - **HIGH_CONFIDENCE_DUPLICATE**: same 1H spectral pattern; review if the scientific question requires compound identity.
 - **SUSPECTED_DUPLICATE**: related or similar spectra; preserve the range evidence and do not overclaim.
 - **NOT_COMPARABLE**: metadata or acquisition differences prevent a valid comparison.
+
+## Incremental history
+
+Use the same `--history-dir` on every run for a project. The script stores a cumulative `nmr_inventory_history.json` keyed by resolved `fid` path. A new run merges its inventory with the history and compares the complete set of old and new spectra.
+
+Each pair is labelled:
+
+- `NEW_NEW`: both datasets came from the current input;
+- `NEW_HISTORY`: one dataset is new and the other is from the history;
+- `HISTORY_HISTORY`: both datasets came from earlier runs.
+
+Use `nmr_scope_breakdown.csv` to verify that the new file was actually compared with the full history.
